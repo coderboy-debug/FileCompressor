@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CZP — Eigener Datei-Kompressor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#EDE7D8;
+    --paper-dim:#E1DACA;
+    --ink:#16181A;
+    --ink-soft:#4B4A45;
+    --line:#C9C0AC;
+    --primary:#2C3E9C;
+    --primary-dim:#3C4FB5;
+    --accent:#C97A2B;
+    --ok:#2E6B45;
+    --bad:#B03A2E;
+    --card:#F6F3EA;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Inter',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:0 0 80px 0;
+  }
+  .mono{ font-family:'IBM Plex Mono', ui-monospace, monospace; }
+  .display{ font-family:'Space Grotesk', sans-serif; }
+
+  /* ---- Hero / signature ---- */
+  .hero{
+    padding:56px 24px 40px;
+    max-width:920px;
+    margin:0 auto;
+    text-align:left;
+  }
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--primary);
+    margin-bottom:14px;
+  }
+  h1{
+    font-family:'Space Grotesk', sans-serif;
+    font-weight:700;
+    font-size:clamp(32px,6vw,52px);
+    line-height:1.05;
+    margin:0 0 16px;
+    letter-spacing:-0.01em;
+  }
+  .lede{
+    font-size:16px;
+    color:var(--ink-soft);
+    max-width:60ch;
+    line-height:1.55;
+    margin:0 0 28px;
+  }
+  .hexstrip{
+    overflow:hidden;
+    white-space:nowrap;
+    border-top:1px solid var(--line);
+    border-bottom:1px solid var(--line);
+    padding:10px 0;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:13px;
+    color:var(--line);
+    letter-spacing:2px;
+    position:relative;
+  }
+  .hexstrip::before{
+    content:"";
+    position:absolute; inset:0;
+    background:linear-gradient(90deg, var(--paper) 0%, transparent 8%, transparent 60%, var(--accent) 61%, var(--accent) 100%);
+    opacity:.9;
+    mix-blend-mode:normal;
+    pointer-events:none;
+  }
+  .hexstrip span{
+    display:inline-block;
+    animation:scrollhex 22s linear infinite;
+  }
+  @keyframes scrollhex{ from{transform:translateX(0);} to{transform:translateX(-50%);} }
+  @media (prefers-reduced-motion: reduce){ .hexstrip span{animation:none;} }
+
+  /* ---- Layout ---- */
+  .wrap{ max-width:920px; margin:0 auto; padding:0 24px; display:grid; gap:28px; }
+  @media (min-width:820px){ .wrap.two{ grid-template-columns:1fr 1fr; } }
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:2px;
+    padding:26px;
+  }
+  .card h2{
+    font-family:'Space Grotesk',sans-serif;
+    font-size:20px;
+    margin:0 0 6px;
+  }
+  .card .sub{
+    color:var(--ink-soft);
+    font-size:13px;
+    margin:0 0 20px;
+    line-height:1.5;
+  }
+
+  .drop{
+    border:1.5px dashed var(--line);
+    border-radius:2px;
+    padding:28px 16px;
+    text-align:center;
+    cursor:pointer;
+    transition:border-color .15s, background .15s;
+    font-size:14px;
+    color:var(--ink-soft);
+  }
+  .drop:hover, .drop.hover{ border-color:var(--primary); background:rgba(44,62,156,0.05); }
+  .drop input{ display:none; }
+
+  ul.filelist{ list-style:none; margin:16px 0 0; padding:0; display:flex; flex-direction:column; gap:6px; }
+  ul.filelist li{
+    display:flex; justify-content:space-between; gap:10px;
+    font-family:'IBM Plex Mono',monospace; font-size:12.5px;
+    padding:8px 10px; background:var(--paper-dim); border-radius:2px;
+  }
+  ul.filelist li .sz{ color:var(--ink-soft); white-space:nowrap; }
+
+  button{
+    font-family:'Space Grotesk',sans-serif;
+    font-weight:600;
+    font-size:14px;
+    background:var(--primary);
+    color:#fff;
+    border:none;
+    padding:12px 20px;
+    border-radius:2px;
+    cursor:pointer;
+    margin-top:18px;
+    width:100%;
+  }
+  button:hover:not(:disabled){ background:var(--primary-dim); }
+  button:disabled{ opacity:.4; cursor:not-allowed; }
+  button.ghost{
+    background:transparent;
+    color:var(--ink);
+    border:1px solid var(--line);
+    width:auto;
+    padding:8px 14px;
+    font-size:12.5px;
+    margin:0;
+  }
+  button.ghost:hover:not(:disabled){ border-color:var(--primary); color:var(--primary); background:transparent; }
+
+  .status{
+    margin-top:14px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    min-height:16px;
+  }
+
+  .stats{ margin-top:18px; border-top:1px solid var(--line); padding-top:16px; }
+  .statrow{ display:flex; justify-content:space-between; font-family:'IBM Plex Mono',monospace; font-size:13px; padding:4px 0; }
+  .statrow .num{ font-weight:600; }
+  .ratio{ color:var(--ok); }
+  .ratio.bad{ color:var(--bad); }
+
+  .bar{
+    height:10px; border-radius:2px; overflow:hidden; display:flex; margin-top:10px;
+    border:1px solid var(--line);
+  }
+  .bar .kept{ background:var(--primary); }
+  .bar .saved{ background:var(--accent); }
+
+  a.dl{
+    display:block; text-align:center;
+    margin-top:14px; padding:12px;
+    background:var(--ok); color:#fff; text-decoration:none;
+    font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:14px;
+    border-radius:2px;
+  }
+  a.dl:hover{ opacity:.9; }
+
+  .entry{
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+    font-family:'IBM Plex Mono',monospace; font-size:12.5px;
+    padding:9px 10px; background:var(--paper-dim); border-radius:2px; margin-top:6px;
+  }
+  .entry .name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  footer{
+    max-width:920px; margin:40px auto 0; padding:0 24px;
+    color:var(--ink-soft); font-size:12px; line-height:1.6;
+    border-top:1px solid var(--line); padding-top:18px;
+  }
+  code{ font-family:'IBM Plex Mono',monospace; background:var(--paper-dim); padding:1px 5px; border-radius:2px; }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="eyebrow">Eigenes Kompressionsformat · .czp</div>
+  <h1>Ein Kompressor,<br>selbst gebaut.</h1>
+  <p class="lede">Kein ZIP unter der Haube — eigene LZSS-Wörterbuchsuche mit großem Suchfenster, gefolgt von kanonischer Huffman-Entropiecodierung, komplett im Browser. Für Bilder, Videos, Dokumente und Text. Priorität: maximale Kompressionsrate.</p>
+  <div class="hexstrip"><span id="hexAnim" class="mono"></span></div>
+</div>
+
+<div class="wrap two">
+
+  <!-- COMPRESS CARD -->
+  <div class="card">
+    <h2>Komprimieren</h2>
+    <p class="sub">Dateien auswählen → werden lokal in ein <code>.czp</code>-Archiv gepackt. Bereits komprimierte Formate (JPG, MP4, ZIP …) werden automatisch unverändert gespeichert, wenn eigene Kompression sie vergrößern würde.</p>
+
+    <div class="drop" id="dropC">
+      <div>Dateien hierher ziehen oder klicken zum Auswählen</div>
+      <input type="file" id="fileInput" multiple>
+    </div>
+    <ul class="filelist" id="fileList"></ul>
+
+    <button id="compressBtn" disabled>Komprimieren</button>
+    <div class="status" id="statusC"></div>
+
+    <div class="stats" id="statsC" style="display:none;">
+      <div class="statrow"><span>Original gesamt</span><span class="num mono" id="origTotal">–</span></div>
+      <div class="statrow"><span>Archiv gesamt</span><span class="num mono" id="compTotal">–</span></div>
+      <div class="statrow"><span>Ersparnis</span><span class="num mono ratio" id="ratioTotal">–</span></div>
+      <div class="bar"><div class="kept" id="barKept" style="width:100%"></div><div class="saved" id="barSaved" style="width:0%"></div></div>
+      <a class="dl" id="downloadLink" style="display:none;">.czp-Archiv herunterladen</a>
+    </div>
+  </div>
+
+  <!-- EXTRACT CARD -->
+  <div class="card">
+    <h2>Extrahieren</h2>
+    <p class="sub">Ein <code>.czp</code>-Archiv auswählen, um die enthaltenen Dateien wieder in Originalgröße herzustellen und einzeln herunterzuladen.</p>
+
+    <div class="drop" id="dropX">
+      <div>.czp-Datei hierher ziehen oder klicken</div>
+      <input type="file" id="archiveInput" accept=".czp,application/octet-stream">
+    </div>
+
+    <div class="status" id="statusX"></div>
+    <div id="entries"></div>
+  </div>
+
+</div>
+
+<footer>
+  Format: eigener Container <code>CZP1</code> · Algorithmus: LZSS (32-KB-Fenster, Hash-Ketten) + kanonisches Huffman auf Literal-/Längensymbolen · alles läuft ausschließlich lokal im Browser, es wird nichts hochgeladen. Bei sehr großen Dateien (z. B. Video) kann die Suche nach der bestmöglichen Kompression je nach Gerät spürbar dauern — das ist hier bewusst zugunsten der Kompressionsrate in Kauf genommen.
+</footer>
+
+<script>
+/* ============================================================
+   BIT I/O
+   ============================================================ */
+class BitWriter{
+  constructor(){ this.bytes=[]; this.cur=0; this.nbits=0; }
+  writeBit(b){ this.cur=(this.cur<<1)|(b&1); this.nbits++; if(this.nbits===8){ this.bytes.push(this.cur); this.cur=0; this.nbits=0; } }
+  writeBits(value,n){ for(let i=n-1;i>=0;i--) this.writeBit((value>>>i)&1); }
+  finish(){ if(this.nbits>0){ this.cur=this.cur<<(8-this.nbits); this.bytes.push(this.cur); this.cur=0; this.nbits=0; } return new Uint8Array(this.bytes); }
+}
+class BitReader{
+  constructor(bytes){ this.bytes=bytes; this.pos=0; this.bitpos=0; }
+  readBit(){ const byte=this.bytes[this.pos]||0; const bit=(byte>>(7-this.bitpos))&1; this.bitpos++; if(this.bitpos===8){ this.bitpos=0; this.pos++; } return bit; }
+  readBits(n){ let v=0; for(let i=0;i<n;i++) v=(v*2)+this.readBit(); return v>>>0; }
+}
+
+/* ============================================================
+   HUFFMAN (canonical)
+   ============================================================ */
+function buildHuffman(freqs){
+  let heap=[];
+  for(const [sym,f] of freqs) heap.push({sym:Number(sym),freq:f,left:null,right:null});
+  while(heap.length>1){
+    heap.sort((a,b)=>a.freq-b.freq);
+    const a=heap.shift(), b=heap.shift();
+    heap.push({sym:null,freq:a.freq+b.freq,left:a,right:b});
+  }
+  const root=heap[0];
+  const codeLengths={};
+  (function walk(node,depth){
+    if(!node.left && !node.right){ codeLengths[node.sym]=Math.max(depth,1); return; }
+    if(node.left) walk(node.left,depth+1);
+    if(node.right) walk(node.right,depth+1);
+  })(root,0);
+  return codeLengths;
+}
+function canonicalCodes(codeLengths){
+  const symbols=Object.keys(codeLengths).map(Number);
+  symbols.sort((a,b)=>codeLengths[a]-codeLengths[b]||a-b);
+  const codes={};
+  let code=0, prevLen=0;
+  for(const sym of symbols){
+    const len=codeLengths[sym];
+    code=code<<(len-prevLen);
+    codes[sym]={code,len};
+    code++; prevLen=len;
+  }
+  return codes;
+}
+function buildDecodeMap(codes){
+  const map=new Map();
+  for(const s in codes){ const {code,len}=codes[s]; map.set(len+':'+code, Number(s)); }
+  return map;
+}
+function huffmanDecodeSymbol(br,map,maxLen){
+  let code=0;
+  for(let len=1;len<=maxLen;len++){
+    code=(code*2)+br.readBit();
+    const key=len+':'+code;
+    if(map.has(key)) return map.get(key);
+  }
+  throw new Error('Huffman-Dekodierung fehlgeschlagen');
+}
+
+/* ============================================================
+   LZSS
+   ============================================================ */
+function lzssCompress(data){
+  const n=data.length;
+  const WINDOW=32768, MIN_MATCH=3, MAX_MATCH=258, MAX_CHAIN=128, HBITS=16;
+  const head=new Int32Array(1<<HBITS).fill(-1);
+  const prev=new Int32Array(Math.max(n,1)).fill(-1);
+  function hash(i){ return ((data[i]*2654435761 ^ data[i+1]*40503 ^ data[i+2])>>>16) & ((1<<HBITS)-1); }
+  const litLenSymbols=[]; const distances=[];
+  let i=0;
+  while(i<n){
+    let bestLen=0, bestDist=0;
+    if(i+MIN_MATCH<=n){
+      const h=hash(i);
+      let cand=head[h], chain=0;
+      const maxLen=Math.min(MAX_MATCH,n-i);
+      while(cand!==-1 && chain<MAX_CHAIN && (i-cand)<=WINDOW){
+        if(data[cand+bestLen]===data[i+bestLen]){
+          let len=0;
+          while(len<maxLen && data[cand+len]===data[i+len]) len++;
+          if(len>bestLen){ bestLen=len; bestDist=i-cand; if(len>=maxLen) break; }
+        }
+        cand=prev[cand]; chain++;
+      }
+    }
+    if(bestLen>=MIN_MATCH){
+      litLenSymbols.push(256+(bestLen-MIN_MATCH));
+      distances.push(bestDist-1);
+      const end=i+bestLen;
+      for(; i<end; i++){ if(i+2<n){ const h=hash(i); prev[i]=head[h]; head[h]=i; } }
+    } else {
+      litLenSymbols.push(data[i]);
+      if(i+2<n){ const h=hash(i); prev[i]=head[h]; head[h]=i; }
+      i++;
+    }
+  }
+  return {litLenSymbols,distances};
+}
+
+function compressBytes(data){
+  const {litLenSymbols,distances}=lzssCompress(data);
+  const freqs=new Map();
+  for(const s of litLenSymbols) freqs.set(s,(freqs.get(s)||0)+1);
+  let codeLengths;
+  if(freqs.size===0) codeLengths={};
+  else if(freqs.size===1){ codeLengths={}; codeLengths[[...freqs.keys()][0]]=1; }
+  else codeLengths=buildHuffman(freqs);
+  const codes=canonicalCodes(codeLengths);
+  const maxLen=Object.keys(codeLengths).length?Math.max(...Object.values(codeLengths)):0;
+  const bw=new BitWriter();
+  let di=0;
+  for(const s of litLenSymbols){
+    const {code,len}=codes[s];
+    bw.writeBits(code,len);
+    if(s>=256) bw.writeBits(distances[di++],15);
+  }
+  const payload=bw.finish();
+  return {codeLengths, symbolCount:litLenSymbols.length, maxLen, payload, origSize:data.length};
+}
+function decompressBytes({codeLengths,symbolCount,maxLen,payload,origSize}){
+  const codes=canonicalCodes(codeLengths);
+  const map=buildDecodeMap(codes);
+  const br=new BitReader(payload);
+  const out=new Uint8Array(origSize);
+  let outPos=0;
+  for(let k=0;k<symbolCount;k++){
+    const sym=huffmanDecodeSymbol(br,map,maxLen);
+    if(sym<256){ out[outPos++]=sym; }
+    else{
+      const len=(sym-256)+3;
+      const dist=br.readBits(15)+1;
+      let src=outPos-dist;
+      for(let t=0;t<len;t++){ out[outPos]=out[src]; outPos++; src++; }
+    }
+  }
+  return out;
+}
+
+/* ============================================================
+   BYTE HELPERS / CONTAINER FORMAT  ("CZP1")
+   ============================================================ */
+function u8(n){ return new Uint8Array([n&0xff]); }
+function u16(n){ const b=new Uint8Array(2); new DataView(b.buffer).setUint16(0,n,true); return b; }
+function u32(n){ const b=new Uint8Array(4); new DataView(b.buffer).setUint32(0,n,true); return b; }
+function strBytes(s){ return new TextEncoder().encode(s); }
+function concatChunks(chunks){
+  let total=0; for(const c of chunks) total+=c.length;
+  const out=new Uint8Array(total); let off=0;
+  for(const c of chunks){ out.set(c,off); off+=c.length; }
+  return out;
+}
+class ByteReader{
+  constructor(buf){ this.buf=buf; this.pos=0; this.dv=new DataView(buf.buffer, buf.byteOffset, buf.byteLength); }
+  u8(){ const v=this.dv.getUint8(this.pos); this.pos+=1; return v; }
+  u16(){ const v=this.dv.getUint16(this.pos,true); this.pos+=2; return v; }
+  u32(){ const v=this.dv.getUint32(this.pos,true); this.pos+=4; return v; }
+  bytes(n){ const v=this.buf.subarray(this.pos,this.pos+n); this.pos+=n; return v; }
+  str(n){ return new TextDecoder().decode(this.bytes(n)); }
+}
+
+function buildFileEntry(name, data){
+  const nameBytes = strBytes(name);
+  const c = compressBytes(data);
+  const tableEntries = Object.keys(c.codeLengths).map(Number);
+  const tableChunks = [];
+  for(const sym of tableEntries){ tableChunks.push(u16(sym), u8(c.codeLengths[sym])); }
+  const table = concatChunks(tableChunks);
+  const compressedTotal = 4+1+2+table.length+4+c.payload.length; // symbolCount+maxLen+tableCount+table+payloadLen+payload
+
+  let method, payloadChunk, usedSize;
+  if(compressedTotal < data.length){
+    method = 1;
+    payloadChunk = concatChunks([
+      u32(c.symbolCount), u8(c.maxLen), u16(tableEntries.length), table, u32(c.payload.length), c.payload
+    ]);
+    usedSize = compressedTotal;
+  } else {
+    method = 0;
+    payloadChunk = concatChunks([u32(data.length), data]);
+    usedSize = data.length;
+  }
+
+  const header = concatChunks([u16(nameBytes.length), nameBytes, u8(method), u32(data.length)]);
+  return { chunk: concatChunks([header, payloadChunk]), usedSize, origSize: data.length, method };
+}
+
+function parseFileEntry(r){
+  const nameLen = r.u16();
+  const name = r.str(nameLen);
+  const method = r.u8();
+  const origSize = r.u32();
+  if(method===1){
+    const symbolCount=r.u32();
+    const maxLen=r.u8();
+    const tableCount=r.u16();
+    const codeLengths={};
+    for(let i=0;i<tableCount;i++){ const sym=r.u16(); const len=r.u8(); codeLengths[sym]=len; }
+    const payloadLen=r.u32();
+    const payload=r.bytes(payloadLen);
+    const data = decompressBytes({codeLengths, symbolCount, maxLen, payload, origSize});
+    return {name, data};
+  } else {
+    const payloadLen=r.u32();
+    const data=r.bytes(payloadLen);
+    return {name, data: new Uint8Array(data)};
+  }
+}
+
+function fmtSize(n){
+  if(n<1024) return n+' B';
+  if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
+  if(n<1024*1024*1024) return (n/1024/1024).toFixed(2)+' MB';
+  return (n/1024/1024/1024).toFixed(2)+' GB';
+}
+
+/* ============================================================
+   UI WIRING
+   ============================================================ */
+const fileInput = document.getElementById('fileInput');
+const dropC = document.getElementById('dropC');
+const fileListEl = document.getElementById('fileList');
+const compressBtn = document.getElementById('compressBtn');
+const statusC = document.getElementById('statusC');
+const statsC = document.getElementById('statsC');
+const downloadLink = document.getElementById('downloadLink');
+
+let selectedFiles = [];
+
+function refreshFileList(){
+  fileListEl.innerHTML='';
+  for(const f of selectedFiles){
+    const li=document.createElement('li');
+    li.innerHTML = `<span>${f.name}</span><span class="sz">${fmtSize(f.size)}</span>`;
+    fileListEl.appendChild(li);
+  }
+  compressBtn.disabled = selectedFiles.length===0;
+}
+
+dropC.addEventListener('click', ()=>fileInput.click());
+fileInput.addEventListener('change', e=>{ selectedFiles = Array.from(e.target.files); refreshFileList(); statsC.style.display='none'; });
+['dragover','dragenter'].forEach(ev=>dropC.addEventListener(ev,e=>{ e.preventDefault(); dropC.classList.add('hover'); }));
+['dragleave','drop'].forEach(ev=>dropC.addEventListener(ev,e=>{ e.preventDefault(); dropC.classList.remove('hover'); }));
+dropC.addEventListener('drop', e=>{ selectedFiles = Array.from(e.dataTransfer.files); refreshFileList(); statsC.style.display='none'; });
+
+function yieldFrame(){ return new Promise(r=>setTimeout(r,0)); }
+
+compressBtn.addEventListener('click', async ()=>{
+  compressBtn.disabled = true;
+  statsC.style.display='none';
+  downloadLink.style.display='none';
+  const chunks = [];
+  let origTotal=0, usedTotal=0;
+  chunks.push(strBytes('CZP1'), u32(selectedFiles.length));
+
+  for(let idx=0; idx<selectedFiles.length; idx++){
+    const f = selectedFiles[idx];
+    statusC.textContent = `Komprimiere ${f.name} (${idx+1}/${selectedFiles.length}) …`;
+    await yieldFrame();
+    const buf = new Uint8Array(await f.arrayBuffer());
+    const entry = buildFileEntry(f.name, buf);
+    chunks.push(entry.chunk);
+    origTotal += entry.origSize;
+    usedTotal += entry.usedSize;
+    await yieldFrame();
+  }
+
+  const archive = concatChunks(chunks);
+  const blob = new Blob([archive], {type:'application/octet-stream'});
+  const url = URL.createObjectURL(blob);
+  downloadLink.href = url;
+  downloadLink.download = (selectedFiles.length===1 ? selectedFiles[0].name.replace(/\.[^.]+$/,'') : 'archiv') + '.czp';
+  downloadLink.style.display='block';
+  downloadLink.textContent = `.czp-Archiv herunterladen (${fmtSize(archive.length)})`;
+
+  const saved = origTotal - usedTotal;
+  const pct = origTotal>0 ? (saved/origTotal*100) : 0;
+  document.getElementById('origTotal').textContent = fmtSize(origTotal);
+  document.getElementById('compTotal').textContent = fmtSize(archive.length);
+  const ratioEl = document.getElementById('ratioTotal');
+  ratioEl.textContent = (pct>=0?'−':'+') + Math.abs(pct).toFixed(1) + '%';
+  ratioEl.classList.toggle('bad', pct<0);
+  const keptPct = origTotal>0 ? Math.max(0, Math.min(100, (usedTotal/origTotal*100))) : 100;
+  document.getElementById('barKept').style.width = keptPct+'%';
+  document.getElementById('barSaved').style.width = (100-keptPct)+'%';
+  statsC.style.display='block';
+
+  statusC.textContent = `Fertig — ${selectedFiles.length} Datei(en) verarbeitet.`;
+  compressBtn.disabled = false;
+});
+
+/* ---- Extraction ---- */
+const archiveInput = document.getElementById('archiveInput');
+const dropX = document.getElementById('dropX');
+const statusX = document.getElementById('statusX');
+const entriesEl = document.getElementById('entries');
+
+dropX.addEventListener('click', ()=>archiveInput.click());
+archiveInput.addEventListener('change', e=>{ if(e.target.files[0]) handleArchive(e.target.files[0]); });
+['dragover','dragenter'].forEach(ev=>dropX.addEventListener(ev,e=>{ e.preventDefault(); dropX.classList.add('hover'); }));
+['dragleave','drop'].forEach(ev=>dropX.addEventListener(ev,e=>{ e.preventDefault(); dropX.classList.remove('hover'); }));
+dropX.addEventListener('drop', e=>{ e.preventDefault(); if(e.dataTransfer.files[0]) handleArchive(e.dataTransfer.files[0]); });
+
+async function handleArchive(file){
+  entriesEl.innerHTML='';
+  statusX.textContent = 'Lese Archiv …';
+  await yieldFrame();
+  try{
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const r = new ByteReader(bytes);
+    const magic = r.str(4);
+    if(magic!=='CZP1'){ statusX.textContent = 'Keine gültige .czp-Datei.'; return; }
+    const count = r.u32();
+    statusX.textContent = `${count} Datei(en) im Archiv:`;
+    for(let i=0;i<count;i++){
+      const {name, data} = parseFileEntry(r);
+      const row = document.createElement('div');
+      row.className='entry';
+      row.innerHTML = `<span class="name">${name}</span><span class="sz">${fmtSize(data.length)}</span>`;
+      const btn = document.createElement('button');
+      btn.className='ghost'; btn.textContent='Herunterladen';
+      btn.addEventListener('click', ()=>{
+        const blob = new Blob([data]);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href=url; a.download=name; a.click();
+        setTimeout(()=>URL.revokeObjectURL(url), 4000);
+      });
+      row.appendChild(btn);
+      entriesEl.appendChild(row);
+      await yieldFrame();
+    }
+  } catch(err){
+    console.error(err);
+    statusX.textContent = 'Fehler beim Lesen: '+err.message;
+  }
+}
+
+/* ---- Hero hex animation (decorative, non-functional) ---- */
+(function(){
+  const el = document.getElementById('hexAnim');
+  let s='';
+  for(let i=0;i<160;i++) s += Math.floor(Math.random()*256).toString(16).padStart(2,'0').toUpperCase()+' ';
+  el.textContent = s+s;
+})();
+</script>
+</body>
+</html>
