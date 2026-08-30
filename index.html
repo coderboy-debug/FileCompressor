@@ -195,6 +195,17 @@
   }
   .entry .name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
+  .modeToggle{ display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
+  .modeOpt{ display:flex; gap:9px; align-items:flex-start; font-size:13px; cursor:pointer; padding:10px; border:1px solid var(--line); border-radius:2px; }
+  .modeOpt:has(input:checked){ border-color:var(--primary); background:rgba(44,62,156,0.05); }
+  .modeOpt input{ margin-top:3px; accent-color:var(--primary); }
+  .modeOpt em{ display:block; font-style:normal; color:var(--ink-soft); font-size:12px; margin-top:2px; }
+  #qualityWrap{ margin-bottom:16px; padding:12px; background:var(--paper-dim); border-radius:2px; }
+  .qualityLabel{ display:flex; justify-content:space-between; font-family:'IBM Plex Mono',monospace; font-size:12.5px; margin-bottom:6px; }
+  #qualitySlider{ width:100%; accent-color:var(--accent); }
+  .hint{ font-size:11.5px; color:var(--ink-soft); line-height:1.5; margin:8px 0 0; }
+  .note{ font-size:12px; color:var(--accent); margin-top:4px; }
+
   footer{
     max-width:920px; margin:40px auto 0; padding:0 24px;
     color:var(--ink-soft); font-size:12px; line-height:1.6;
@@ -218,6 +229,16 @@
   <div class="card">
     <h2>Komprimieren</h2>
     <p class="sub">Dateien auswählen → werden lokal in ein <code>.czp</code>-Archiv gepackt. Bereits komprimierte Formate (JPG, MP4, ZIP …) werden automatisch unverändert gespeichert, wenn eigene Kompression sie vergrößern würde.</p>
+
+    <div class="modeToggle">
+      <label class="modeOpt"><input type="radio" name="mode" value="lossless" id="modeLossless" checked><span>Verlustfrei <em>(bit-genau, für Dokumente/Text/Code)</em></span></label>
+      <label class="modeOpt"><input type="radio" name="mode" value="lossy" id="modeLossy"><span>Verlustbehaftet <em>(viel kleiner, für Fotos/Videos/Scans — leichter Qualitätsverlust)</em></span></label>
+    </div>
+    <div id="qualityWrap" style="display:none;">
+      <div class="qualityLabel"><span>Qualität</span><span class="mono" id="qualityVal">60%</span></div>
+      <input type="range" id="qualitySlider" min="10" max="95" value="60">
+      <p class="hint">Niedriger = kleinere Dateien, sichtbarer Qualitätsverlust. Gilt für Bilder, Videos und JPEGs in gescannten PDFs. Video-Neukodierung läuft in Echtzeit (dauert also etwa so lange wie das Video selbst) und braucht einen Browser mit <code>MediaRecorder</code>-Unterstützung (Chrome/Edge/Firefox).</p>
+    </div>
 
     <div class="drop" id="dropC">
       <div>Dateien hierher ziehen oder klicken zum Auswählen</div>
@@ -470,6 +491,208 @@ function parseFileEntry(r){
   }
 }
 
+/* ============================================================
+   LOSSY RECOMPRESSION (Bilder / Video / eingebettete JPEGs in PDFs)
+   ============================================================ */
+function recompressJpegBytesBrowser(inputBytes, quality){
+  return new Promise((resolve,reject)=>{
+    const blob = new Blob([inputBytes]);
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img,0,0);
+      canvas.toBlob(async (outBlob)=>{
+        URL.revokeObjectURL(url);
+        if(!outBlob){ reject(new Error('Canvas-Kodierung fehlgeschlagen')); return; }
+        resolve(new Uint8Array(await outBlob.arrayBuffer()));
+      }, 'image/jpeg', quality/100);
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('Bild konnte nicht dekodiert werden')); };
+    img.src = url;
+  });
+}
+
+async function recompressImageFile(file, quality){
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const out = await recompressJpegBytesBrowser(buf, quality);
+  const newName = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+  return {name:newName, data:out};
+}
+
+function recompressVideoFile(file, quality){
+  return new Promise((resolve,reject)=>{
+    if(typeof MediaRecorder==='undefined' || !HTMLVideoElement.prototype.captureStream){
+      reject(new Error('Dieser Browser unterstützt keine Video-Neukodierung (MediaRecorder/captureStream fehlt)'));
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.src = url;
+    video.muted = true;
+    video.playsInline = true;
+    video.style.position='fixed'; video.style.left='-9999px'; video.style.top='-9999px'; video.style.width='2px';
+    document.body.appendChild(video);
+
+    function cleanup(){ URL.revokeObjectURL(url); if(video.parentNode) video.parentNode.removeChild(video); }
+
+    video.addEventListener('loadedmetadata', async () => {
+      try{
+        const stream = video.captureStream();
+        const candidates = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+        const mimeType = candidates.find(t=>MediaRecorder.isTypeSupported(t)) || 'video/webm';
+        const q = Math.max(0, Math.min(1, quality/100));
+        const videoBitsPerSecond = Math.round(150000 + q*q*7850000);
+        const rec = new MediaRecorder(stream, {mimeType, videoBitsPerSecond, audioBitsPerSecond:128000});
+        const chunks=[];
+        rec.ondataavailable = e=>{ if(e.data && e.data.size>0) chunks.push(e.data); };
+        rec.onerror = e=>{ cleanup(); reject(e.error||new Error('MediaRecorder-Fehler')); };
+        rec.onstop = async ()=>{
+          cleanup();
+          const outBlob = new Blob(chunks, {type:mimeType});
+          const buf = new Uint8Array(await outBlob.arrayBuffer());
+          const newName = file.name.replace(/\.[^.]+$/, '') + '.webm';
+          resolve({name:newName, data:buf});
+        };
+        video.addEventListener('ended', ()=>{ try{ rec.stop(); }catch(_){ } }, {once:true});
+        rec.start(250);
+        await video.play();
+      } catch(err){ cleanup(); reject(err); }
+    }, {once:true});
+    video.addEventListener('error', ()=>{ cleanup(); reject(new Error('Video konnte nicht geladen werden')); });
+  });
+}
+
+async function recompressPdfLossy(bytes, quality, jpegRecompressor){
+  const dec = new TextDecoder('latin1');
+  const text = dec.decode(bytes);
+  if(/\/Encrypt\b/.test(text)) throw new Error('verschlüsseltes PDF wird nicht unterstützt');
+  const trailerMatch = /trailer\s*<<(.*?)>>/s.exec(text);
+  if(!trailerMatch) throw new Error('kein klassisches PDF-Trailer gefunden (evtl. moderne Cross-Reference-Streams)');
+  const trailerBody = trailerMatch[1];
+  const rootMatch = /\/Root\s+(\d+\s+\d+\s+R)/.exec(trailerBody);
+  const infoMatch = /\/Info\s+(\d+\s+\d+\s+R)/.exec(trailerBody);
+  if(!rootMatch) throw new Error('kein /Root im Trailer gefunden');
+
+  const objRe = /(\d+)\s+(\d+)\s+obj\b/g;
+  let m; const objects=[];
+  while((m=objRe.exec(text))){ objects.push({num:parseInt(m[1],10), start:m.index, headerEnd:objRe.lastIndex}); }
+  if(objects.length===0) throw new Error('keine PDF-Objekte gefunden');
+  objects.sort((a,b)=>a.start-b.start);
+  const prefixEnd = objects[0].start;
+
+  for(let i=0;i<objects.length;i++){
+    const searchFrom = objects[i].headerEnd;
+    const nextStart = (i+1<objects.length)? objects[i+1].start : text.length;
+    const endobjIdx = text.indexOf('endobj', searchFrom);
+    objects[i].end = (endobjIdx!==-1 && endobjIdx<nextStart) ? endobjIdx+'endobj'.length : nextStart;
+  }
+
+  const edits=[];
+  for(let i=0;i<objects.length;i++){
+    const o=objects[i];
+    const body=text.slice(o.start,o.end);
+    if(!/\/Subtype\s*\/Image\b/.test(body)) continue;
+    if(!/\/Filter\s*\/DCTDecode\b/.test(body) && !/\/Filter\s*\[\s*\/DCTDecode\s*\]/.test(body)) continue;
+    const lenMatch = /\/Length\s+(\d+)\b/.exec(body);
+    if(!lenMatch) continue;
+    const afterLen = body.slice(lenMatch.index+lenMatch[0].length, lenMatch.index+lenMatch[0].length+20);
+    if(/^\s*\d+\s+R/.test(afterLen)) continue;
+    const oldLen = parseInt(lenMatch[1],10);
+    const lenDigitsStartRel = lenMatch.index + lenMatch[0].indexOf(lenMatch[1]);
+    const lenDigitsEndRel = lenDigitsStartRel + lenMatch[1].length;
+    const streamKwIdx = body.indexOf('stream', lenDigitsEndRel);
+    if(streamKwIdx===-1) continue;
+    let payloadStartRel = streamKwIdx+'stream'.length;
+    if(body[payloadStartRel]==='\r' && body[payloadStartRel+1]==='\n') payloadStartRel+=2;
+    else if(body[payloadStartRel]==='\n') payloadStartRel+=1;
+    const payloadEndRel = payloadStartRel+oldLen;
+    edits.push({ objIndex:i, lenDigitsStart:o.start+lenDigitsStartRel, lenDigitsEnd:o.start+lenDigitsEndRel,
+      payloadStart:o.start+payloadStartRel, payloadEnd:o.start+payloadEndRel });
+  }
+  if(edits.length===0) throw new Error('keine passenden JPEG-Bilder im PDF gefunden');
+
+  for(const e of edits){
+    const jpegBytes = bytes.subarray(e.payloadStart, e.payloadEnd);
+    const newBytes = await jpegRecompressor(jpegBytes, quality);
+    e.newBytes = (newBytes.length < jpegBytes.length) ? newBytes : jpegBytes;
+  }
+
+  const editsByObj = new Map(edits.map(e=>[e.objIndex,e]));
+  const chunks=[bytes.subarray(0,prefixEnd)];
+  let runningOffset = prefixEnd;
+  const maxObjNum = Math.max(...objects.map(o=>o.num));
+  const offsetByNum = new Map();
+
+  for(let i=0;i<objects.length;i++){
+    const o=objects[i];
+    offsetByNum.set(o.num, runningOffset);
+    const e = editsByObj.get(i);
+    if(e){
+      const part1=bytes.subarray(o.start, e.lenDigitsStart);
+      const newLenAscii=new TextEncoder().encode(String(e.newBytes.length));
+      const part2=bytes.subarray(e.lenDigitsEnd, e.payloadStart);
+      const part3=e.newBytes;
+      const part4=bytes.subarray(e.payloadEnd, o.end);
+      chunks.push(part1,newLenAscii,part2,part3,part4);
+      runningOffset += part1.length+newLenAscii.length+part2.length+part3.length+part4.length;
+    } else {
+      const seg=bytes.subarray(o.start,o.end);
+      chunks.push(seg);
+      runningOffset += seg.length;
+    }
+    const nextStart = (i+1<objects.length)? objects[i+1].start : null;
+    if(nextStart!==null && nextStart>o.end){
+      const gap=bytes.subarray(o.end,nextStart);
+      chunks.push(gap);
+      runningOffset += gap.length;
+    }
+  }
+
+  const xrefOffset = runningOffset;
+  let xrefText = 'xref\n0 '+(maxObjNum+1)+'\n';
+  xrefText += '0000000000 65535 f \n';
+  for(let n=1;n<=maxObjNum;n++){
+    xrefText += offsetByNum.has(n)
+      ? String(offsetByNum.get(n)).padStart(10,'0')+' 00000 n \n'
+      : '0000000000 00000 f \n';
+  }
+  const rootRef = rootMatch[1];
+  const infoPart = infoMatch ? ('/Info '+infoMatch[1]+' ') : '';
+  xrefText += 'trailer\n<< /Size '+(maxObjNum+1)+' /Root '+rootRef+' '+infoPart+'>>\nstartxref\n'+xrefOffset+'\n%%EOF';
+  chunks.push(new TextEncoder().encode(xrefText));
+  return concatChunks(chunks);
+}
+
+async function processFileForArchive(f, lossy, quality, onNote){
+  if(!lossy){
+    return buildFileEntry(f.name, new Uint8Array(await f.arrayBuffer()));
+  }
+  let name = f.name, data;
+  try{
+    if(/^image\/(jpeg|png|webp|bmp)$/i.test(f.type) || /\.(jpe?g|png|webp|bmp)$/i.test(f.name)){
+      const r = await recompressImageFile(f, quality);
+      name = r.name; data = r.data;
+    } else if(f.type.startsWith('video/') || /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(f.name)){
+      const r = await recompressVideoFile(f, quality);
+      name = r.name; data = r.data;
+    } else if(f.type==='application/pdf' || /\.pdf$/i.test(f.name)){
+      const buf = new Uint8Array(await f.arrayBuffer());
+      data = await recompressPdfLossy(buf, quality, recompressJpegBytesBrowser);
+    } else {
+      data = new Uint8Array(await f.arrayBuffer());
+    }
+  } catch(err){
+    if(onNote) onNote(`${f.name}: ${err.message} — verlustfrei übernommen.`);
+    name = f.name;
+    data = new Uint8Array(await f.arrayBuffer());
+  }
+  return buildFileEntry(name, data);
+}
+
 function fmtSize(n){
   if(n<1024) return n+' B';
   if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
@@ -489,6 +712,17 @@ const statsC = document.getElementById('statsC');
 const downloadLink = document.getElementById('downloadLink');
 
 let selectedFiles = [];
+
+const modeLossless = document.getElementById('modeLossless');
+const modeLossy = document.getElementById('modeLossy');
+const qualityWrap = document.getElementById('qualityWrap');
+const qualitySlider = document.getElementById('qualitySlider');
+const qualityVal = document.getElementById('qualityVal');
+
+function syncModeUI(){ qualityWrap.style.display = modeLossy.checked ? 'block' : 'none'; }
+modeLossless.addEventListener('change', syncModeUI);
+modeLossy.addEventListener('change', syncModeUI);
+qualitySlider.addEventListener('input', ()=>{ qualityVal.textContent = qualitySlider.value+'%'; });
 
 function refreshFileList(){
   fileListEl.innerHTML='';
@@ -514,14 +748,16 @@ compressBtn.addEventListener('click', async ()=>{
   downloadLink.style.display='none';
   const chunks = [];
   let origTotal=0, usedTotal=0;
+  const notes = [];
   chunks.push(strBytes('CZP1'), u32(selectedFiles.length));
+  const lossy = modeLossy.checked;
+  const quality = parseInt(qualitySlider.value,10);
 
   for(let idx=0; idx<selectedFiles.length; idx++){
     const f = selectedFiles[idx];
-    statusC.textContent = `Komprimiere ${f.name} (${idx+1}/${selectedFiles.length}) …`;
+    statusC.textContent = `${lossy ? 'Komprimiere (verlustbehaftet)' : 'Komprimiere'} ${f.name} (${idx+1}/${selectedFiles.length}) …`;
     await yieldFrame();
-    const buf = new Uint8Array(await f.arrayBuffer());
-    const entry = buildFileEntry(f.name, buf);
+    const entry = await processFileForArchive(f, lossy, quality, note=>notes.push(note));
     chunks.push(entry.chunk);
     origTotal += entry.origSize;
     usedTotal += entry.usedSize;
@@ -548,7 +784,8 @@ compressBtn.addEventListener('click', async ()=>{
   document.getElementById('barSaved').style.width = (100-keptPct)+'%';
   statsC.style.display='block';
 
-  statusC.textContent = `Fertig — ${selectedFiles.length} Datei(en) verarbeitet.`;
+  statusC.innerHTML = `Fertig — ${selectedFiles.length} Datei(en) verarbeitet.` +
+    (notes.length ? notes.map(n=>`<div class="note">⚠ ${n}</div>`).join('') : '');
   compressBtn.disabled = false;
 });
 
